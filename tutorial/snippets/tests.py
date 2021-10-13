@@ -1,8 +1,10 @@
 from datetime import datetime
 import io
+from logging import disable
 from django.test import TestCase, Client
 from django.test.utils import setup_test_environment
-from django.urls import reverse
+from django.urls import reverse as r
+from django.contrib.auth.models import User
 from snippets.models import Snippet
 from snippets.serializers import SnippetSerializer
 from rest_framework.renderers import JSONRenderer
@@ -11,21 +13,25 @@ from rest_framework import status
 from random import choice
 import string
 
-"""
-Example test case
-class QuestionIndexViewTests(TestCase):
-    def test_no_questions(self):
-        "
-        If no questions exist, an appropriate message is displayed.
-        "
-        response = self.client.get(reverse('polls:index'))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "No polls are available.")
-        self.assertQuerysetEqual(response.context['latest_question_list'], [])
-"""
+TEST_USER = "testuser"
+TEST_PASS = "testpassword"
+
+def setup_user():
+    User.objects.create_superuser(
+        username=TEST_USER,
+        password=TEST_PASS,
+        is_superuser=True,
+        is_staff=True
+    )
+
+def disable_test(func):
+    """Decorator that stops a test from being run"""
+    pass
 
 def create_snippet(code_text='',title_text=''):
-    return Snippet.objects.create(code=code_text, title=title_text)
+    return Snippet.objects.create(code=code_text, 
+                                  title=title_text, 
+                                  owner=User.objects.first())
 
 def print_current_objects():
     print('Current objects:')
@@ -34,11 +40,28 @@ def print_current_objects():
 def create_random_string(chars = string.ascii_letters + string.digits, N=10):
     return ''.join(choice(chars) for i in range(N))
 
+def get_user_pk(username):
+    try:
+        user_pk = User.objects.all().filter(username=username).first().pk
+    except AttributeError:
+        user_pk = 0
+    return user_pk
+
+def login_user(client, username=TEST_USER, password=TEST_PASS):
+    setup_user()
+    response = client.login(username=username, password=password)
+    return response
+
+
 class SnippetCreationTests(TestCase):
+    #@disable_test
     def test_snippet_created_date(self):
         """
         Test that a simple snippet has the correct date time added
         """
+        client = Client()
+        login_user(client)
+        
         code_text = 'print("Hello, world")\n'
         snippet = create_snippet(code_text=code_text)
         
@@ -58,10 +81,14 @@ class SnippetCreationTests(TestCase):
                           'UTC',
                           msg="Snippet auto-date timezone is not 'UTC'")
     
+    #@disable_test
     def test_snippet_creation_no_code(self):
         """
         Test that evaluates the response of snippet creation without code text
         """
+        client = Client()
+        login_user(client)
+
         snippet = create_snippet()
         
         #check that snippet object exists and that code field is blank
@@ -69,24 +96,17 @@ class SnippetCreationTests(TestCase):
                           '',
                           msg="Snippet code text is not blank")
     
-    #def test_long_title(self):
-        #"""
-        #Test the response of a title exceeding the character limit
-        #"""
-        #max_length = Snippet._meta.get_field('title').max_length
-
-        #title_text = create_random_string(N=max_length + 10)
-        
-        #snippet = create_snippet(title_text=title_text)
-        #print(len(snippet.title))
-        #####################################################
 
 
 class SnippetSerializerTests(TestCase):
+    #@disable_test
     def test_simple_create(self):
         """
         Test the creation of a simple snippet
         """
+        client = Client()
+        login_user(client)
+
         code_text = 'print("Hello, world")\n'
         snippet = create_snippet(code_text=code_text)
         serializer = SnippetSerializer(snippet)
@@ -108,10 +128,14 @@ class SnippetSerializerTests(TestCase):
 
 
 class SnippetJSONRenderTests(TestCase):
+    #@disable_test
     def test_simple_JSON_render(self):
         """
         Test basic JSON conversion to and from
         """
+        client = Client()
+        login_user(client)
+
         code_text = 'print("Hello, world")\n'
         snippet = create_snippet(code_text=code_text)
         serializer1 = SnippetSerializer(snippet)
@@ -141,10 +165,14 @@ class SnippetJSONRenderTests(TestCase):
         #self.assertDictEqual(serializer1.data, serializer2.validated_data,
         #                    msg="Validated serialized dictionary does not match original")
 
+    #@disable_test
     def test_JSON_render_with_blank_code(self):
         """
         Test basic JSON conversion to and from with no code text
         """
+        client = Client()
+        login_user(client)
+
         snippet = create_snippet(code_text='')
         serializer1 = SnippetSerializer(snippet)
         content = JSONRenderer().render(serializer1.data)
@@ -161,11 +189,14 @@ class SnippetJSONRenderTests(TestCase):
             "[ErrorDetail(string='This field may not be blank.', code='blank')]",
             msg="JSONParser did not return 'field may not be blank' error message")
         
-    
+    #@disable_test
     def test_JSON_render_with_long_title(self):
         """
         Test basic JSON conversion to and from with too long a title
         """
+        client = Client()
+        login_user(client)
+
         max_length = Snippet._meta.get_field('title').max_length
         title_text = create_random_string(N=max_length + 10)
         
@@ -188,13 +219,19 @@ class SnippetJSONRenderTests(TestCase):
 
 
 class JSONAPITests(TestCase):
+    #@disable_test
     def test_API_retrieval_simple(self):
         """
         Simple test to verify API retrieval for good input
         """
         client = Client()
-        snippet = create_snippet("print('this is test test test)")
-        response = client.get(reverse('snippets-detail-view', args=(snippet.id,)))
+        logged_in = login_user(client)
+
+        #check that log in was successful
+        self.assertTrue(logged_in, msg="Login was unsuccessful")
+        response = client.post(r('snippets-view'), {'code': "This is a test"})
+
+        response = client.get(r('snippets-detail-view', args=(response.data['id'],)))
 
         #check if response status code is 200 (OK)
         self.assertEquals(response.status_code,
@@ -208,23 +245,57 @@ class JSONAPITests(TestCase):
 
         #check ID of snippet matches ID of returned JSON
         self.assertEquals(response.json()['id'],
-                          snippet.id,
+                          response.data['id'],
                           msg="JSON returned mismatched ID")
 
         #check snippet code matches code of returned JSON
         self.assertEquals(response.json()['code'],
-                          snippet.code,
+                          response.data['code'],
                           msg="JSON returned mismatched code")
-    
+
+    #@disable_test
     def test_API_retrieval_out_of_index(self):
         """
         Simple test to verify API retrieval for an index that doesn't exist
         """
         client = Client()
-        snippet = create_snippet("print('this is test test test)")
-        response = client.get(reverse('snippets-detail-view', args=(snippet.id + 1,)))
+        logged_in = login_user(client)
+
+        #check that log in was successful
+        self.assertTrue(logged_in, msg="Login was unsuccessful")
+        response = client.post(r('snippets-view'), {'code': "This is a test"})
+
+        response = client.get(r('snippets-detail-view', args=(response.data['id'] + 1,)))
 
         #check if response status code is 404
         self.assertEquals(response.status_code, 
                           status.HTTP_404_NOT_FOUND,
                           msg="Reponse code not 404 as expected")
+    
+    #@disable_test
+    def test_authenticated_can_add(self):
+        """
+        Test to verify that an authenticated user can add
+        """
+        client = Client()
+        logged_in = login_user(client)
+
+        #check that log in was successful
+        self.assertTrue(logged_in, msg="Login was unsuccessful")
+        response = client.post(r('snippets-view'), {'code': "This is a test"})
+        
+        #check that response returns 201 created
+        self.assertEquals(response.status_code, status.HTTP_201_CREATED,
+                          msg=f"Response was {response.status_code} instead of 201 created")
+        
+    #@disable_test
+    def test_non_authenticated_cannot_add(self):
+        """
+        Test to verify that a non-authenticated user cannot add
+        """
+        client = Client()
+        response = client.post(r('snippets-view'), {'code': "This is a test"})
+        
+        #check that response returns 403 forbidden
+        self.assertEquals(response.status_code, status.HTTP_403_FORBIDDEN,
+                          msg="Non-authenticated responses not 403 forbidden")
