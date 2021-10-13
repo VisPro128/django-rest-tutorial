@@ -2,7 +2,7 @@ from datetime import datetime
 import io
 from logging import disable
 from django.http import response
-from django.test import TestCase, Client
+from django.test import TestCase, Client, client
 from django.test.utils import setup_test_environment
 from django.urls import reverse as r
 from django.contrib.auth.models import User
@@ -102,7 +102,6 @@ class SnippetCreationTests(TestCase):
             '',
             msg="Snippet code text is not blank"
         )
-    
 
 
 class SnippetSerializerTests(TestCase):
@@ -243,6 +242,31 @@ class SnippetJSONRenderTests(TestCase):
 
 
 class JSONAPITests(TestCase):
+    #@disable_test
+    def test_default_pages_no_errors(self):
+        """
+        Test that the default pages return 200 OK
+        """
+        client = Client()
+
+        response = client.get(r('snippet-list'))
+        
+        #check for response status code
+        self.assertEquals(
+            response.status_code,
+            status.HTTP_200_OK,
+            msg=f"Snippets list page returned {response.status_code} instead of 200 OK"
+        )
+
+        response = client.get(r('user-list'))
+        
+        #check for response status code
+        self.assertEquals(
+            response.status_code,
+            status.HTTP_200_OK,
+            msg=f"Users list page returned {response.status_code} instead of 200 OK"
+        )
+
     #@disable_test
     def test_API_retrieval_simple(self):
         """
